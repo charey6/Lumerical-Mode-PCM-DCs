@@ -1,0 +1,192 @@
+
+# get the transmission from FDE combined with propagate command
+
+# user inputs
+# wavelength
+lambda_0 = 1310e-9;
+
+#############################
+h_wg = 300e-9;
+h_slab = 100e-9;
+w_b = 500e-9;
+w_h = 483.2e-9;
+
+h_pcm = 20e-9;
+
+gap_0 = 200e-9;
+gap_end = 500e-9;
+
+fn_result = "./gap_results/Intel_300nm_100nm_silicon_wb_500nm_wh_483p7nm_sweep_gap_200-500nm.txt";
+note = "gap(nm), l_c(um), T_bar_c (dB), T_cross_c (dB), T_bar_a (dB), T_cross_a (dB)";
+write(fn_result, note);
+
+gap = 310e-9;
+
+for (gap = gap_0; gap <= gap_end; gap = gap + 10e-9){
+    ### Set geometry
+    select("::model");
+    set("h_slab", h_slab);
+    set("h_wg", h_wg);
+    set("w_h", w_h);
+    set("h_pcm", h_pcm);
+    set("w_b", w_b);
+    set("gap", gap);
+    set("lambda_0", lambda_0);
+
+    
+    cleardcard; 
+    
+    #########################################
+    ### Set up the directional coupler ######
+    ### Save the bare mode and hybrid mode###
+    #########################################
+    
+    # bare waveguide        
+    switchtolayout;
+    select("pcm_wg");
+    set("PCM", "c-SbS");
+    set("enabled", 0);
+    select("bare_wg");      
+    set("enabled", 1); 
+    runsetup;
+    findmodes;
+    n_b = getresult("::model::analysis::FDE::data::mode1", "neff"); 
+    cleardcard("E_b");
+    copydcard("mode1", "E_b"); 
+    
+    y = getdata("mode1","y");
+    z = getdata("mode1","z");    
+    
+    # c-SbS mode
+    switchtolayout;
+    select("pcm_wg");
+    set("PCM", "c-SbS");
+    set("enabled", 1);
+    select("bare_wg"); 
+    set("enabled", 0);
+    runsetup;
+    findmodes;
+    n_h = getresult("::model::analysis::FDE::data::mode1", "neff"); 
+    cleardcard("E_h_c");
+    copydcard("mode1", "E_h_c"); 
+    
+    # a-SbS mode
+    switchtolayout;
+    select("pcm_wg");
+    set("PCM", "a-SbS");
+    set("enabled", 1);
+    select("bare_wg"); 
+    set("enabled", 0);
+    runsetup;
+    findmodes;
+    cleardcard("E_h_a");
+    copydcard("mode1", "E_h_a"); 
+    
+    #######################################
+    ###    Compute coupling length      ###
+    ####################################### 
+    switchtolayout;
+
+    select("pcm_wg");
+    set("PCM", "a-SbS");
+    set("enabled", 1);
+    select("bare_wg");        
+    set("enabled", 1);
+    
+    runsetup;
+    findmodes;
+    
+    na_arr = matrix(1, 2);
+    for(i=1:2){
+        na_arr(i) = real(getresult("::model::analysis::FDE::data::mode" + num2str(i), "neff"));
+    }
+    
+    l_c = lambda_0/(na_arr(1) - na_arr(2))/2;
+    
+    
+    #######################################
+    ### Calculate a transmission      ###
+    #######################################  
+
+    ### calculate the bar and cross transmission ####
+    ## calculate the transmission at the two ports ##
+    # Note this step has to be directly after solving for the supermodes 
+    nmin = na_arr(2);
+    nmax = na_arr(1);  
+    outmode_a = propagate("E_b", l_c, nmin, nmax);
+    
+    mode_overlap_a = overlap("E_b", outmode_a);
+    power_overlap_a = mode_overlap_a(2);
+    P_out_a = integrate(getelectric(outmode_a), 2:3, y, z);
+    P_source = integrate(getelectric("E_b"), 2:3, y, z);
+    T_a = P_out_a/P_source;
+    T_bar_a = power_overlap_a * T_a;
+    
+    mode_overlap_a = overlap(outmode_a, "E_h_a");
+    power_overlap_a = mode_overlap_a(2);
+    T_cross_a =  power_overlap_a * T_a;
+    
+    T_bar_a_dB = 10*log10(T_bar_a);
+    T_cross_a_dB = 10*log10(T_cross_a);
+
+    #######################################
+    ### Calculate c configuration      ###
+    #######################################    
+    switchtolayout;
+    
+    # enable both waveguides
+    select("pcm_wg");
+    set("PCM", "c-SbS");
+    set("enabled", 1);
+    select("bare_wg");        
+    set("enabled", 1);
+    
+    runsetup;
+    findmodes;
+    
+    nc_arr = matrix(1, 2);
+    for(i=1:2){
+        nc_arr(i) = getresult("::model::analysis::FDE::data::mode" + num2str(i), "neff");
+    }
+    
+    ### calculate the bar and cross transmission ####
+    ## calculate the transmission at the two ports ##
+    # Note this step has to be directly after solving for the supermodes 
+    nmin = real(nc_arr(2));
+    nmax = real(nc_arr(1));  
+    outmode_c = propagate("E_b", l_c, nmin, nmax);
+    
+    mode_overlap_c = overlap("E_b", outmode_c);
+    power_overlap_c = mode_overlap_c(2);
+    P_out_c = integrate(getelectric(outmode_c), 2:3, y, z);
+    T_c = P_out_c/P_source;
+    T_bar_c = power_overlap_c * T_c;
+    
+    mode_overlap_c = overlap(outmode_c, "E_h_c");
+    power_overlap_c = mode_overlap_c(2);
+    T_cross_c =  power_overlap_c * T_c;
+    
+    T_bar_c_dB = 10*log10(T_bar_c);
+    T_cross_c_dB = 10*log10(T_cross_c);
+
+    
+    print("**************************Result********************");
+    print("wh(nm): " + num2str(w_h*1e9, "%.3f") + ", gap(nm): " + num2str(gap*1e9, "%.3f") + ", l_c(um) " + num2str(l_c*1e6, "%.3f"));
+    print("----------------------------------");
+    print("In a configuration");
+    print("cross: " + num2str(T_cross_a, "%.3f") + " or " + num2str(T_cross_a_dB, "%.3f") + "dB");
+    print("bar: " + num2str(T_bar_a, "%.3f") + " or " + num2str(T_bar_a_dB, "%.3f") + "dB"); 
+    print("----------------------------------");
+    print("In c configuration");
+    print("cross: " + num2str(T_cross_c, "%.3f") + " or " + num2str(T_cross_c_dB, "%.3f") + "dB");
+    print("bar: " + num2str(T_bar_c, "%.3f") + " or " + num2str(T_bar_c_dB, "%.3f") + "dB");   
+    print("----------------------------------");
+
+    result = matrix(1,5);
+    result = real([gap*1e9, l_c*1e6, T_bar_a_dB, T_cross_a_dB, T_bar_c_dB, T_cross_c_dB]);
+    
+    write(fn_result, num2str(result, "%.6f"));
+}
+
+
+
